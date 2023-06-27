@@ -1,0 +1,154 @@
+kind: live
+title: fastchat
+
+defaults:
+  life_span: 5d
+
+images:
+  fastchat:
+    ref: image:$[[ flow.project_id ]]:v1
+    dockerfile: $[[ flow.workspace ]]/docker/Dockerfile
+    context: $[[ flow.workspace ]]/
+
+volumes:
+  cache:
+    remote: storage:$[[ flow.project_id ]]/cache
+    mount: /root/.cache/huggingface
+    local: cache
+  pycache:
+    remote: storage://cato-gpu-poc/yevheniisemendiak/fchadds
+    mount: /root/.local/lib/python3.9/site-packages/
+  pycache2:
+    remote: storage://cato-gpu-poc/yevheniisemendiak/pycache2
+    mount: /root/.local/lib/python3.9/site-packages/
+  project:
+    remote: storage:$[[ flow.project_id ]]
+    mount: /project
+    local: .
+  tests:
+    remote: storage:$[[ flow.project_id ]]/tests
+    mount: /project/tests
+    local: tests
+  training:
+    remote: storage:$[[ flow.project_id ]]/training
+    mount: /project/training
+    local: training
+  results:
+    remote: storage:$[[ flow.project_id ]]/results
+    mount: /project/results
+    local: results
+
+
+jobs:
+  controller:
+    image: ${{ images.fastchat.ref }}
+    preset: cpu-small
+    http_port: "21001"
+    detach: true
+    bash: |
+      python3.9 -m fastchat.serve.controller --host 0.0.0.0 --port 21001
+
+  worker:
+    image: ${{ images.fastchat.ref }}
+    volumes:
+      - ${{ volumes.cache.ref_rw }}
+    env:
+      FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
+    preset: gpu-small
+    detach: true
+    multi: true
+    params:
+      model: vicuna-7b-v1.3
+    bash: |
+      python3.9 -m fastchat.serve.model_worker \
+        --model-name ${{ params.model }} \
+        --model-path lmsys/${{ params.model }} \
+        --worker-address http://$NEURO_JOB_INTERNAL_HOSTNAME_NAMED:21002 \
+        --controller-address $FASTCHAT_CONTROLLER_URL \
+        --host 0.0.0.0 --port 21002 #--num-gpus 2
+
+  api:
+    image: ${{ images.fastchat.ref }}
+    env:
+      FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
+    http_port: "8000"
+    preset: cpu-small
+    detach: true
+    bash: |
+      python3.9 -m fastchat.serve.openai_api_server \
+        --controller-address $FASTCHAT_CONTROLLER_URL \
+        --host 0.0.0.0 --port 8000
+
+  web:
+    image: ${{ images.fastchat.ref }}
+    env:
+      FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
+    http_port: "8000"
+    preset: cpu-small
+    detach: true
+    browse: true
+    bash: |
+      python3.9 -m fastchat.serve.gradio_web_server \
+        --controller-url $FASTCHAT_CONTROLLER_URL \
+        --model-list-mode reload \
+        --host 0.0.0.0 --port 8000
+
+  locust:
+    image: locustio/locust
+    http_port: 8089
+    preset: cpu-small
+    detach: True
+    env:
+      NEURO_TOKEN: secret:NEURO_TOKEN
+    volumes:
+      - ${{ volumes.tests.ref_ro }}
+    cmd: -f ${{ volumes.tests.mount }}/locustfile.py -H http://${{ inspect_job('api').internal_hostname_named }}:8000
+
+  train:
+    image: ${{ images.fastchat.ref }}
+    preset: gpu-small
+    volumes:
+      - ${{ upload(volumes.training).ref_rw }}
+      - ${{ volumes.cache.ref_rw }}
+      - ${{ volumes.pycache.ref_rw }}
+      - ${{ volumes.results.ref_rw }}
+    env:
+      CACHE_ROOT: ${{ volumes.cache.mount }}
+      RESULTS_ROOT: ${{ volumes.results.mount }}
+    cmd: python3.9 ${{ volumes.training.mount }}/train.py
+
+  train2:
+    image: ${{ images.fastchat.ref }}
+    preset: gpu-small
+    volumes:
+      - ${{ volumes.cache.ref_rw }}
+      - ${{ volumes.pycache2.ref_rw }}
+      - ${{ volumes.results.ref_rw }}
+    env:
+      CACHE_ROOT: ${{ volumes.cache.mount }}
+      RESULTS_ROOT: ${{ volumes.results.mount }}
+    bash: |
+      apt update -y -qq
+      apt install --no-install-recommends -qq git cmake pkg-config wget -y
+      git clone https://github.com/huggingface/transformers ${{ volumes.cache.mount }}/transformers || echo Transformers are already there
+      cd ${{ volumes.cache.mount }}/transformers
+      pip install --user .
+      cd examples/legacy/seq2seq
+      pip install --user -r requirements.txt || bash
+
+      wget https://cdn-datasets.huggingface.co/summarization/xsum.tar.gz
+      tar -xzvf xsum.tar.gz
+      export XSUM_DIR=${PWD}/xsum
+
+      python3.9 finetune_trainer.py \
+        --model_name_or_path t5-small \
+        --do_train \
+        --do_eval \
+        --dataset_name cnn_dailymail \
+        --dataset_config "3.0.0" \
+        --source_prefix "summarize: " \
+        --output_dir ${{ volumes.results.mount }}/text-summarization \
+        --per_device_train_batch_size=4 \
+        --per_device_eval_batch_size=4 \
+        --overwrite_output_dir \
+        --predict_with_generate
