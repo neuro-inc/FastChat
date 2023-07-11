@@ -48,11 +48,13 @@ jobs:
     params:
       model: vicuna-13b-v1.3
     bash: |
+      worker_hostname=${NEURO_JOB_INTERNAL_HOSTNAME_NAMED/21f085730c/${{ project.project_name }}}
+      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.model_worker \
         --model-name ${{ params.model }} \
         --model-path lmsys/${{ params.model }} \
-        --worker-address http://$NEURO_JOB_INTERNAL_HOSTNAME_NAMED:21002 \
-        --controller-address $FASTCHAT_CONTROLLER_URL \
+        --worker-address http://$worker_hostname:21002 \
+        --controller-address $controller_hostname \
         --host 0.0.0.0 --port 21002 --num-gpus 2 #--load-8bit
 
   api:
@@ -64,8 +66,9 @@ jobs:
     preset: cpu-small
     detach: true
     bash: |
+      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.openai_api_server \
-        --controller-address $FASTCHAT_CONTROLLER_URL \
+        --controller-address $controller_hostname \
         --host 0.0.0.0 --port 8000
 
   web:
@@ -78,8 +81,9 @@ jobs:
     detach: true
     browse: true
     bash: |
+      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.gradio_web_server \
-        --controller-url $FASTCHAT_CONTROLLER_URL \
+        --controller-url $controller_hostname \
         --model-list-mode reload \
         --host 0.0.0.0 --port 8000
 
