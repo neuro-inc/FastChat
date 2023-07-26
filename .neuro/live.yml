@@ -8,7 +8,7 @@ defaults:
 
 images:
   fastchat:
-    ref: image://cato-gpu-poc/yevheniisemendiak/fastchat:v1
+    ref: image://onprem-poc/yevheniisemendiak/fastchat:v1
     dockerfile: $[[ flow.workspace ]]/docker/Dockerfile
     context: $[[ flow.workspace ]]/
 
@@ -30,7 +30,7 @@ jobs:
   controller:
     image: ${{ images.fastchat.ref }}
     name: controller
-    preset: cpu-small
+    preset: cpu-mini
     http_port: "21001"
     detach: true
     bash: |
@@ -42,19 +42,17 @@ jobs:
       - ${{ volumes.cache.ref_rw }}
     env:
       FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
-    preset: gpu-medium
+    preset: gpu-2x3090
     detach: true
     multi: true
     params:
       model: vicuna-13b-v1.3
     bash: |
-      worker_hostname=${NEURO_JOB_INTERNAL_HOSTNAME_NAMED/21f085730c/${{ project.project_name }}}
-      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.model_worker \
         --model-name ${{ params.model }} \
         --model-path lmsys/${{ params.model }} \
-        --worker-address http://$worker_hostname:21002 \
-        --controller-address $controller_hostname \
+        --worker-address http://$NEURO_JOB_INTERNAL_HOSTNAME_NAMED:21002 \
+        --controller-address $FASTCHAT_CONTROLLER_URL \
         --host 0.0.0.0 --port 21002 --num-gpus 2 #--load-8bit
 
   api:
@@ -63,12 +61,11 @@ jobs:
       FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
     http_port: "8000"
     name: api
-    preset: cpu-small
+    preset: cpu-mini
     detach: true
     bash: |
-      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.openai_api_server \
-        --controller-address $controller_hostname \
+        --controller-address $FASTCHAT_CONTROLLER_URL \
         --host 0.0.0.0 --port 8000
 
   web:
@@ -76,14 +73,13 @@ jobs:
     env:
       FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
     http_port: "8000"
-    preset: cpu-small
+    preset: cpu-mini
     name: web
     detach: true
     browse: true
     bash: |
-      controller_hostname=${FASTCHAT_CONTROLLER_URL/21f085730c/${{ project.project_name }}}
       python3.9 -m fastchat.serve.gradio_web_server \
-        --controller-url $controller_hostname \
+        --controller-url $FASTCHAT_CONTROLLER_URL \
         --model-list-mode reload \
         --host 0.0.0.0 --port 8000
 
