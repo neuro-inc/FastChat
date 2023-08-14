@@ -8,7 +8,7 @@ defaults:
 
 images:
   fastchat:
-    ref: image://onprem-poc/yevheniisemendiak/fastchat:v1
+    ref: image:$[[ project.id ]]:v1
     dockerfile: $[[ flow.workspace ]]/docker/Dockerfile
     context: $[[ flow.workspace ]]/
 
@@ -42,18 +42,25 @@ jobs:
       - ${{ volumes.cache.ref_rw }}
     env:
       FASTCHAT_CONTROLLER_URL: http://${{ inspect_job('controller').internal_hostname_named }}:21001
-    preset: gpu-2x3090
+    preset: ${{ params.preset }}
     detach: true
     multi: true
     params:
-      model: vicuna-13b-v1.3
+      # https://github.com/lm-sys/FastChat/blob/main/docs/model_support.md#supported-models
+      # lmsys/vicuna-7b-v1.5, lmsys/vicuna-7b-v1.5-16k,  lmsys/vicuna-13b-v1.5, lmsys/vicuna-13b-v1.5-16k, lmsys/vicuna-33b-v1.3
+      # and many more
+      model: lmsys/vicuna-7b-v1.5
+      # model:
+      preset: gpu-small
+      extra: "" # e.g. --load-8bit
     bash: |
       python3.9 -m fastchat.serve.model_worker \
         --model-name ${{ params.model }} \
-        --model-path lmsys/${{ params.model }} \
+        --model-path ${{ params.model }} \
         --worker-address http://$NEURO_JOB_INTERNAL_HOSTNAME_NAMED:21002 \
         --controller-address $FASTCHAT_CONTROLLER_URL \
-        --host 0.0.0.0 --port 21002 --num-gpus 2 #--load-8bit
+        --host 0.0.0.0 --port 21002 \
+        --num-gpus `nvidia-smi --query-gpu=name --format=csv,noheader | wc -l` ${{ params.extra }}
 
   api:
     image: ${{ images.fastchat.ref }}

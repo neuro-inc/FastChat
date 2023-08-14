@@ -1,7 +1,8 @@
+# togo: generalize
 curl -s https://api--21f085730c.jobs.onprem-poc.org.neu.ro/v1/completions \
   -H "Content-Type: application/json" -H "Authorization: Bearer `neuro config show-token`" \
   -d '{
-    "model": "vicuna-13b-v1.3",
+    "model": "vicuna-7b-v1.3",
     "prompt": "Once upon a time",
     "max_tokens": 41,
     "temperature": 0.5
